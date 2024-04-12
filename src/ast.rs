@@ -1,18 +1,27 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use itertools::Itertools;
 
 pub type ReactionTerms<'s> = HashMap<Symbol<'s>, usize>;
 
 #[derive(Debug)]
+pub enum Goal<'s> {
+    Resources(ReactionTerms<'s>),
+    Reactions
+}
+
+#[derive(Debug)]
 pub enum Item<'s> {
     Target(Target<'s>),
-    Reaction(Reaction<'s>)
+    Reaction(Reaction<'s>),
 }
 
 #[derive(Debug)]
 pub enum TargetItem<'s> {
     Input(Vec<Symbol<'s>>),
-    Constraint(Vec<ReactionTerms<'s>>)
+    Constraint(Vec<ReactionTerms<'s>>),
+    InTime(usize),
+    Goal(Goal<'s>),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -25,7 +34,10 @@ pub struct Symbol<'s>(pub &'s str);
 pub struct Target<'s> {
     pub inputs: Vec<Symbol<'s>>,
     pub constraints: ReactionTerms<'s>,
+    pub in_time: usize,
     pub name: &'s str,
+    pub goal: Option<Goal<'s>>,
+    pub span: (usize, usize),
 }
 
 #[derive(Debug)]
@@ -39,6 +51,7 @@ pub struct Reaction<'s> {
     pub inputs: ReactionTerms<'s>,
     pub outputs: ReactionTerms<'s>,
     pub cost: Cost,
+    pub label: Option<Cow<'s, str>>
 }
 
 impl<'s> Reaction<'s> {

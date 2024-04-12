@@ -1,12 +1,84 @@
+
+// diesel
+"(distillery) distillation of oil into heavy fuel":
 50 raw-oil -(20)-> 5 sulfuric-heavy-fuel;
+"(distillery) distillation of oil into heavy fuel":
 50 raw-oil -(20)-> 25 sulfuric-light-fuel;
 
+"(chemical reactor) hydrodesulfurization of sulfuric heavy fuel":
 1000 sulfuric-heavy-fuel + 250 H2 -(20)-> 1000 heavy-fuel + 125 H2S;
+
+"(chemical reactor) hydrodesulfurization of sulfuric light fuel":
 3000 sulfuric-light-fuel + 500 H2 -(40)-> 3000 light-fuel + 250 H2S;
 
+"(mixer) mixing of diesel":
 5000 light-fuel + 1000 heavy-fuel -(16)-> 6000 diesel;
 
+// nitrogen
+"(compressor) collection of air":
+/* thin air */ -(300)-> 1000 air;
+
+"(chemical reactor) oxidation of nitrogen":
+5000 air -(1600)-> 3900 N2 + 1000 O2;
+
+// Haber-Bosch process
+"(chemical reactor) hydrogenation of nitrogen":
+3000 H2 + 1000 N2 -(320)-> 1000 ammonia;
+
+// start Ostwald Process
+"(chemical reactor) oxidation of ammonia":
+10000 O2 + 4000 ammonia -(320)-> 4000 NO + 6000 H2O;
+
+"(chemical reactor) oxidation of NO":
+1000 NO + 1000 O2 -(160)-> 1000 NO2;
+
+"(chemical reactor) dissolution of NO2 in water":
+1000 H2O + 3000 NO2 -(240)-> 2000 nitric-acid + 1000 NO;
+// end Ostwald Process
+
+// acetic acid
+"(chemical reactor): incomplete combustion of charcoal":
+charcoal + 1000 O2 -(80)-> 1000 CO;
+
+"(chemical reactor) hydrogenation of CO":
+4000 H2 + 1000 CO -(120)-> 1000 methanol;
+
+"(chemical reactor) synthesize acetic acid from methanol and CO":
+1000 methanol + 1000 CO -(300)-> 1000 acetic-acid;
+
+// sulfur
+"(chemical reactor) hydration of SO3": 1000 H2O + 1000 SO3 -(320)-> 1000 sulfuric-acid;
+"(chemical reactor) oxidation of SO2": 1000 SO2 + 1000 O2 -(200)-> 1000 SO3;
+"(chemical reactor) oxidation of sulfur dust": sulfur-dust + 2000 O2 -(60)-> 1000 SO2;
+"(distillery) concentration of diluted sulfuric acid": 60 diluted-sulfuric-acid -(24)-> 40 sulfuric-acid;
+
+"(chemical reactor) dilution of sulfuric acid":
+1000 H2S + 100H2O -(60)-> 750 diluted-sulfuric-acid;
+
+// cetane boosted diesel
+
+"(mixer) mixing of ethenone":
+1000 acetic-acid + 1000 sulfuric-acid -(160)-> 1000 ethenone + 1000 diluted-sulfuric-acid;
+
+"(chemical reactor) nitration of ethenone":
+1000 ethenone + 8000 nitric-acid -(480)-> 2000 CN4O8 + 9000 H2O;
+
+"(mixer) mixing of cetane-boosted-diesel":
+1000 diesel + 20 CN4O8 -(20)-> 1000 cetane-boosted-diesel;
+
 target diesel {
-    using raw-oil, H2
+    using raw-oil, H2;
     create 1 diesel;
 }
+
+target cetane-boosted-diesel {
+    using raw-oil, H2, O2, H2O, sulfur-dust, charcoal;
+    create 1 cetane-boosted-diesel;
+    minimize reactions;
+}
+
+// target cetane-boosted-diesel {
+//     using raw-oil, H2, O2, H2O, charcoal;
+//     create 1 cetane-boosted-diesel;
+//     minimize resources sulfur-dust;
+// }

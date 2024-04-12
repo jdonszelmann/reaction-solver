@@ -13,6 +13,5 @@ lalrpop = "0.20.2"
 lalrpop-util = { version = "0.20.2", features = ["lexer", "unicode"] }
 itertools = "0.12.1"
 clap = { version = "4.5.4", features = ["derive", "cargo", "env"] }
-num-integer = "0.1.46"
 minos = {git="https://github.com/jdonszelmann/minos"}
 unicode-segmentation = "1.11.0"

@@ -3,14 +3,24 @@ use crate::ast::*;
 use crate::merge_terms;
 use itertools::{Itertools, Either};
 use std::collections::HashMap;
+use lalrpop_util::ParseError;
+use std::borrow::Cow;
 
 grammar;
+
+extern {
+    type Error = (usize, String, usize);
+}
 
 match {
     // Keywords
     "target",
     "create",
     "using",
+    "in",
+    "minimize",
+    "resources",
+    "reactions",
 
     // Structural tokens
     "{",
@@ -28,6 +38,8 @@ match {
 
     // Literals
     r"[0-9]+" => int,
+    r#""(\\"|[^"])*""# => dstring,
+    r"'(\\'|[^'])*'" => sstring,
 
     // Whitespaces
     r"\s+" => {},
@@ -59,12 +71,19 @@ Comma<T>: Vec<T> = {
     }
 };
 
+Label: Cow<'input, str> = {
+    <ident: identifier> => Cow::Borrowed(ident),
+    <string: sstring> => Cow::Owned(String::from(&string[1..string.len()-1])),
+    <string: dstring> => Cow::Owned(String::from(&string[1..string.len()-1])),
+}
+
 Reaction: Reaction<'input> = {
-    <inputs: Sum<ReactionTerm>>
+    <label: (<Label> ":")?> <inputs: Sum<ReactionTerm>>
     "-(" <minus: "-"?> <cost: int> ")->"
     <outputs: Sum<ReactionTerm>>
     ";" => {
         Reaction {
+            label,
             inputs: inputs
                 .into_iter()
                 .reduce(merge_terms)
@@ -94,28 +113,56 @@ ReactionTerm: ReactionTerms<'input> = {
     }
 };
 
+Goal: Goal<'input> = {
+    "resources" <rt: Sum<ReactionTerm>> => Goal::Resources(rt.into_iter().reduce(merge_terms).unwrap_or_default()),
+    "reactions" => Goal::Reactions,
+}
 
 TargetItem: TargetItem<'input> = {
     "using" <symbols: Comma<identifier>> => TargetItem::Input(symbols.into_iter().map(Symbol).collect()),
     "create" <terms: Sum<ReactionTerm>> => TargetItem::Constraint(terms),
+    "in" <time: int> => TargetItem::InTime(usize::from_str(time).unwrap()),
+    "minimize" <goal: Goal> => TargetItem::Goal(goal),
 }
 
 Target: Target<'input> = {
-    "target" <name: identifier> "{"
-        <target_items: (<TargetItem> ";")*>
-    "}" => {
-        let (inputs, constraints): (Vec<_>, Vec<_>) = target_items
-            .into_iter()
-            .partition_map(|i| match i {
-                TargetItem::Input(i) => Either::Left(i),
-                TargetItem::Constraint(c) => Either::Right(c),
-            });
+    <tl: @L> "target" <name: identifier> "{"
+        <target_items: (<@L> <TargetItem> <@R> ";")*>
+    "}" <tr: @R> =>? {
+        let mut inputs = Vec::new();
+        let mut constraints = Vec::new();
+        let mut in_time = None;
+        let mut goal = None;
 
-        Target {
+        for (l, i, r) in target_items {
+            match i {
+                TargetItem::Input(i) => inputs.push(i),
+                TargetItem::Constraint(i) => constraints.push(i),
+                TargetItem::InTime(i) => {
+                    if in_time.replace(i).is_some() {
+                        return Err(ParseError::User {
+                            error: (l, format!("duplicate 'in' specification in {name}"), r)
+                        });
+                    }
+                }
+                TargetItem::Goal(i) => {
+                    if goal.replace(i).is_some() {
+                        return Err(ParseError::User {
+                            error: (l, format!("duplicate 'goal' specification in {name}"), r)
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Target {
             name,
             inputs: inputs.into_iter().flatten().collect(),
             constraints: constraints.into_iter().flatten().reduce(merge_terms).unwrap_or_default(),
-        }
+            in_time: in_time.unwrap_or(1),
+            goal,
+            span: (tl, tr),
+        })
     }
 };
 

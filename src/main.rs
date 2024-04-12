@@ -11,7 +11,7 @@ use itertools::Itertools;
 use lalrpop_util::ParseError;
 use minos::{Label, Report, ReportKind, Source};
 use ast::{ReactionTerms, Symbol};
-use crate::ast::{Program, Target};
+use crate::ast::{Goal, Program, Target};
 
 mod grammar;
 mod ast;
@@ -69,10 +69,6 @@ fn main() {
 
     let program = parse(&input, args.file.to_string_lossy().as_ref());
 
-    let lcm = program.reactions.iter()
-        .map(|i| i.cost.0)
-        .fold(1, num_integer::lcm);
-
     let Some(target ) = program.targets.get(args.target.as_str()) else {
         let cmdline_args = std::env::args().join(" ");
         let offset = cmdline_args.find(&args.target).unwrap();
@@ -102,7 +98,7 @@ fn main() {
         }
     };
 
-    if let Err(e) = generate_minizinc(&mut f, &input, &program, lcm, target) {
+    if let Err(e) = generate_minizinc(&mut f, &input, &program, target) {
         exit_report(
             &Report::build(ReportKind::Error)
                 .with_message(e.to_string())
@@ -118,7 +114,11 @@ fn main() {
 
     let mut cmd = Command::new("minizinc");
     cmd
-        // .args(["--solver", "sat"])
+        .args(["--soln-sep", ""])
+        .args(["--search-complete-msg", ""])
+        .args(["--unsatorunbnd-msg", "unsatisfiable or unbounded"])
+        .args(["--unsatisfiable-msg", "unsatisfiable"])
+        .args(["--solver", "cbc"])
         .args(["-p", cpus.as_str()])
         .arg(MINIZINC_OUTPUT_NAME)
         .stdout(Stdio::piped())
@@ -151,7 +151,17 @@ fn main() {
     println!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
-fn generate_minizinc(w: &mut impl Write, input: &str, program: &Program, lcm: isize, target: &Target) -> io::Result<()> {
+fn generate_minizinc(w: &mut impl Write, input: &str, program: &Program, target: &Target) -> io::Result<()> {
+    let Some(ref goal) = target.goal else {
+        exit_report(
+            &Report::build(ReportKind::Error)
+                .with_message(format!("expected 'goal' specification in target {}", target.name))
+                .with_label(Label::new(target.span.0..target.span.1).with_message("in this target"))
+                .finish(),
+            Source::from(input.to_string())
+        );
+    };
+
     for i in input.lines() {
         writeln!(w, "% {i}")?;
     }
@@ -161,7 +171,13 @@ fn generate_minizinc(w: &mut impl Write, input: &str, program: &Program, lcm: is
 
     for reaction in &program.reactions {
         let variable = reaction.var_name();
-        writeln!(w, "var 0..: {variable};")?;
+        writeln!(w, "var float: {variable};")?;
+    }
+
+    writeln!(w)?;
+    writeln!(w, "% non-negative constraints")?;
+    for reaction in &program.reactions {
+        writeln!(w, "constraint {} >= 0;", reaction.var_name())?;
     }
 
     writeln!(w)?;
@@ -171,21 +187,23 @@ fn generate_minizinc(w: &mut impl Write, input: &str, program: &Program, lcm: is
         let mut consumption = vec!["0".to_string()];
 
         for reaction in &program.reactions {
-            let correction = lcm / reaction.cost.0;
+            let cost = reaction.cost.0;
 
             if let Some(&i) = reaction.inputs.get(symbol) {
-                consumption.push(format!("{correction} * {i} * {}", reaction.var_name()))
+                consumption.push(format!("{i} * {} / {cost}", reaction.var_name()))
             }
 
             if let Some(&i) = reaction.outputs.get(symbol) {
-                production.push(format!("{correction} * {i} * {}", reaction.var_name()))
+                production.push(format!("{i} * {} / {cost}", reaction.var_name()))
             }
         }
 
         let production = production.join("+");
         let consumption = consumption.join("+");
 
-        writeln!(w, "constraint ({production}) - ({consumption}) >= {scalar} * {lcm};")?;
+        let in_time = target.in_time;
+
+        writeln!(w, "constraint ({production}) - ({consumption}) >= {scalar} / {in_time};")?;
     }
 
     writeln!(w)?;
@@ -199,33 +217,80 @@ fn generate_minizinc(w: &mut impl Write, input: &str, program: &Program, lcm: is
 
     let using: HashSet<&Symbol> = target.inputs.iter().collect();
     for symbol in symbols {
-        if using.contains(&symbol) {
-            continue;
+        match goal {
+            Goal::Reactions if using.contains(&symbol) => continue,
+            Goal::Resources(rt) if using.contains(&symbol) || rt.keys().contains(&symbol) => continue,
+            _ => {}
         }
 
         let mut production = vec!["0".to_string()];
         let mut consumption = vec!["0".to_string()];
 
         for reaction in &program.reactions {
-            let correction = lcm / reaction.cost.0;
+            let cost = reaction.cost.0;
 
             if let Some(&i) = reaction.inputs.get(&symbol) {
-                consumption.push(format!("{correction} * {i} * {}", reaction.var_name()))
+                consumption.push(format!("{i} * {} / {cost}", reaction.var_name()))
             }
 
             if let Some(&i) = reaction.outputs.get(&symbol) {
-                production.push(format!("{correction} * {i} * {}", reaction.var_name()))
+                production.push(format!("{i} * {} / {cost}", reaction.var_name()))
             }
         }
 
         let production = production.join("+");
         let consumption = consumption.join("+");
 
-        writeln!(w, "constraint {production} >= {consumption};")?;
+        writeln!(w, "constraint ({production}) >= {consumption};")?;
     }
 
     writeln!(w)?;
-    writeln!(w, "solve minimize {};", program.reactions.iter().map(|i| i.var_name()).format("+"))?;
+    match goal {
+        Goal::Resources(rt) => {
+            let mut production = vec!["0".to_string()];
+            let mut consumption = vec!["0".to_string()];
+
+            for (symbol, weight) in rt {
+                for reaction in &program.reactions {
+                    if let Some(&i) = reaction.inputs.get(&symbol) {
+                        consumption.push(format!("{i} * {} * {weight}", reaction.var_name()))
+                    }
+
+                    if let Some(&i) = reaction.outputs.get(&symbol) {
+                        production.push(format!("{i} * {} * {weight}", reaction.var_name()))
+                    }
+                }
+            }
+
+            let production = production.join("+");
+            let consumption = consumption.join("+");
+
+            writeln!(w, "solve minimize ({consumption}) - ({production});")?;
+        }
+        Goal::Reactions => {
+            writeln!(w, "solve minimize {};", program.reactions.iter().map(|i| i.var_name()).format("+"))?;
+        }
+    }
+
+    let mut output_exprs = Vec::new();
+    let max_width = program
+        .reactions
+        .iter()
+        .map(|reaction| {
+            let reaction_name = reaction.var_name();
+            let pretty_name = reaction.label.as_deref().unwrap_or(&reaction_name);
+            pretty_name.chars().count()
+        })
+        .max()
+        .unwrap_or(0);
+
+    for reaction in &program.reactions {
+        let reaction_name = reaction.var_name();
+        let pretty_name = reaction.label.as_deref().unwrap_or(&reaction_name);
+        output_exprs.push(format!("if fix({reaction_name}) > 0 then \"{pretty_name:<width$} =\" ++ show_float(8, 5, {reaction_name}) ++ \"\\n\" else \"\" endif", width=max_width))
+    }
+
+    writeln!(w, "output [{}];", output_exprs.join(",\n"))?;
 
     Ok(())
 }
@@ -252,7 +317,7 @@ fn parse<'s>(input: &'s str, filename: &str) -> Program<'s> {
                 ParseError::InvalidToken { location } => {
                     Report::build(ReportKind::Error)
                         .with_message("invalid token")
-                        .with_location((), location)
+                        .with_label(Label::new(location..location+1).with_message("here"))
                         .finish()
                 }
                 ParseError::UnrecognizedEof { location, expected } => {
@@ -273,7 +338,12 @@ fn parse<'s>(input: &'s str, filename: &str) -> Program<'s> {
                         .with_label(Label::new(from..to).with_message("no rule expects this token"))
                         .finish()
                 }
-                ParseError::User { .. } => unreachable!(),
+                ParseError::User { error: (from, err, to) } => {
+                    Report::build(ReportKind::Error)
+                        .with_message("parse error".to_string())
+                        .with_label(Label::new(from..to).with_message(err))
+                        .finish()
+                }
             };
 
             exit_report(
