@@ -1,0 +1,18 @@
+[package]
+name = "reaction-solver"
+version = "0.1.0"
+edition = "2021"
+build = "src/build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+lalrpop = "0.20.2"
+
+[dependencies]
+lalrpop-util = { version = "0.20.2", features = ["lexer", "unicode"] }
+itertools = "0.12.1"
+clap = { version = "4.5.4", features = ["derive", "cargo", "env"] }
+num-integer = "0.1.46"
+minos = {git="https://github.com/jdonszelmann/minos"}
+unicode-segmentation = "1.11.0"

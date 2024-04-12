@@ -1,0 +1,141 @@
+use std::str::FromStr;
+use crate::ast::*;
+use crate::merge_terms;
+use itertools::{Itertools, Either};
+use std::collections::HashMap;
+
+grammar;
+
+match {
+    // Keywords
+    "target",
+    "create",
+    "using",
+
+    // Structural tokens
+    "{",
+    "}",
+    ")->",
+    "-(",
+    "+",
+    "-",
+    ",",
+    ";",
+    ":",
+
+    // Identifier
+    r"[_a-zA-Z][_a-zA-Z0-9\-]*" => identifier,
+
+    // Literals
+    r"[0-9]+" => int,
+
+    // Whitespaces
+    r"\s+" => {},
+
+    // Line comments
+    r"//[^\n]*\n" => {},
+
+    // Block comments
+    r"/\*([^*]|(\*[^/]))*\*/" => {},
+}
+
+Sum<T>: Vec<T> = {
+    <mut v:(<T> "+")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
+Reaction: Reaction<'input> = {
+    <inputs: Sum<ReactionTerm>>
+    "-(" <minus: "-"?> <cost: int> ")->"
+    <outputs: Sum<ReactionTerm>>
+    ";" => {
+        Reaction {
+            inputs: inputs
+                .into_iter()
+                .reduce(merge_terms)
+                .unwrap_or_default()
+            ,
+            cost: Cost(
+                if minus.is_some() {
+                    -1
+                } else {
+                    1
+                }
+                * isize::from_str(cost).unwrap()
+            ),
+            outputs: outputs
+                .into_iter()
+                .reduce(merge_terms)
+                .unwrap_or_default()
+        }
+    }
+};
+
+ReactionTerm: ReactionTerms<'input> = {
+    <scalar: int?> <symbol: identifier> => {
+        let mut res = HashMap::new();
+        res.insert(Symbol(symbol),  scalar.map(|x| usize::from_str(x).unwrap()).unwrap_or(1));
+        res
+    }
+};
+
+
+TargetItem: TargetItem<'input> = {
+    "using" <symbols: Comma<identifier>> => TargetItem::Input(symbols.into_iter().map(Symbol).collect()),
+    "create" <terms: Sum<ReactionTerm>> => TargetItem::Constraint(terms),
+}
+
+Target: Target<'input> = {
+    "target" <name: identifier> "{"
+        <target_items: (<TargetItem> ";")*>
+    "}" => {
+        let (inputs, constraints): (Vec<_>, Vec<_>) = target_items
+            .into_iter()
+            .partition_map(|i| match i {
+                TargetItem::Input(i) => Either::Left(i),
+                TargetItem::Constraint(c) => Either::Right(c),
+            });
+
+        Target {
+            name,
+            inputs: inputs.into_iter().flatten().collect(),
+            constraints: constraints.into_iter().flatten().reduce(merge_terms).unwrap_or_default(),
+        }
+    }
+};
+
+Item: Item<'input> = {
+    Target => Item::Target(<>),
+    Reaction => Item::Reaction(<>),
+}
+
+pub Program: Program<'input> = {
+    <items: Item*> => {
+        let (targets, reactions) = items
+            .into_iter()
+            .partition_map(|i| match i {
+                Item::Target(t) => Either::Left((t.name, t)),
+                Item::Reaction(r) => Either::Right(r),
+            });
+
+        Program {
+            reactions,
+            targets
+        }
+    }
+};

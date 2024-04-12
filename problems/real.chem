@@ -1,0 +1,12 @@
+50 raw-oil -(20)-> 5 sulfuric-heavy-fuel;
+50 raw-oil -(20)-> 25 sulfuric-light-fuel;
+
+1000 sulfuric-heavy-fuel + 250 H2 -(20)-> 1000 heavy-fuel + 125 H2S;
+3000 sulfuric-light-fuel + 500 H2 -(40)-> 3000 light-fuel + 250 H2S;
+
+5000 light-fuel + 1000 heavy-fuel -(16)-> 6000 diesel;
+
+target diesel {
+    using raw-oil, H2
+    create 1 diesel;
+}
